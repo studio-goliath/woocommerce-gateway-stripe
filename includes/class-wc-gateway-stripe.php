@@ -855,12 +855,15 @@ class WC_Gateway_Stripe extends WC_Payment_Gateway_CC {
 
 		foreach ( $order_items as $order_item ){
 			$product = $order_item->get_product();
-			$product_cat = $product->get_category_ids();
 
-			$order_has_weekend = in_array( $week_end_term_id, $product_cat );
+			if( $product instanceof WC_Product_Simple) {
+				$product_cat = $product->get_category_ids();
 
-			if( $order_has_weekend ){
-				return true;
+				$order_has_weekend = in_array( $week_end_term_id, $product_cat );
+
+				if( $order_has_weekend ){
+					return true;
+				}
 			}
 		}
 
