@@ -487,6 +487,41 @@ if ( ! class_exists( 'WC_Stripe' ) ) :
 							update_post_meta( $order_id, 'Net Revenue From Stripe', $net );
 						}
 					}
+				} else {
+
+					// Peut être un customer a débiter plus tard
+					$customer_id = get_post_meta( $order_id, '_stripe_customer_id', true );
+					$customer_charge_captured = get_post_meta( $order_id, '_stripe_customer_charge_captured', true );
+
+					if( $customer_id && 'no' == $customer_charge_captured ){
+
+						$result = WC_Stripe_API::request( array(
+							'amount'    => $order->get_total() * 100,
+							'currency'  => strtolower(  $order->get_currency() ),
+							'customer'  => $customer_id,
+							'expand[]'  => 'balance_transaction',
+						));
+
+						if ( is_wp_error( $result ) ) {
+							$order->add_order_note( __( 'Unable to capture charge!', 'woocommerce-gateway-stripe' ) . ' ' . $result->get_error_message() );
+						} else {
+							$order->add_order_note( sprintf( __( 'Stripe charge complete (Charge ID: %s)', 'woocommerce-gateway-stripe' ), $result->id ) );
+							update_post_meta( $order_id, '_stripe_customer_charge_captured', 'yes' );
+
+							// Store other data such as fees
+							update_post_meta( $order_id, 'Stripe Payment ID', $result->id );
+							update_post_meta( $order_id, '_transaction_id', $result->id );
+
+							if ( isset( $result->balance_transaction ) && isset( $result->balance_transaction->fee ) ) {
+								// Fees and Net needs to both come from Stripe to be accurate as the returned
+								// values are in the local currency of the Stripe account, not from WC.
+								$fee = ! empty( $result->balance_transaction->fee ) ? self::format_number( $result->balance_transaction, 'fee' ) : 0;
+								$net = ! empty( $result->balance_transaction->net ) ? self::format_number( $result->balance_transaction, 'net' ) : 0;
+								update_post_meta( $order_id, 'Stripe Fee', $fee );
+								update_post_meta( $order_id, 'Net Revenue From Stripe', $net );
+							}
+						}
+					}
 				}
 			}
 		}

@@ -764,34 +764,49 @@ class WC_Gateway_Stripe extends WC_Payment_Gateway_CC {
 
 				$this->log( "Info: Begin processing payment for order $order_id for the amount of {$order->get_total()}" );
 
-				// Make the request.
-				$response = WC_Stripe_API::request( $this->generate_payment_request( $order, $source ) );
+				// La commande contient t'elle des week end en direct
+				if ($this->order_has_week_end($order)) {
 
-				if ( is_wp_error( $response ) ) {
-					// Customer param wrong? The user may have been deleted on stripe's end. Remove customer_id. Can be retried without.
-					if ( 'customer' === $response->get_error_code() && $retry ) {
-						delete_user_meta( get_current_user_id(), '_stripe_customer_id' );
-						return $this->process_payment( $order_id, false, $force_customer );
-						// Source param wrong? The CARD may have been deleted on stripe's end. Remove token and show message.
-					} elseif ( 'source' === $response->get_error_code() && $source->token_id ) {
-						$token = WC_Payment_Tokens::get( $source->token_id );
-						$token->delete();
-						$message = __( 'This card is no longer available and has been removed.', 'woocommerce-gateway-stripe' );
-						$order->add_order_note( $message );
-						throw new Exception( $message );
+					// Si la commande a des week end on prend juste le token du user stripe et on fera fera l'opération bancaire plus tard en back office
+					$this->process_week_end_order( $source, $order );
+
+				} else {
+
+					// Make the request.
+					$response = WC_Stripe_API::request($this->generate_payment_request($order,
+						$source));
+
+					if (is_wp_error($response)) {
+						// Customer param wrong? The user may have been deleted on stripe's end. Remove customer_id. Can be retried without.
+						if ('customer' === $response->get_error_code() && $retry) {
+							delete_user_meta(get_current_user_id(),
+								'_stripe_customer_id');
+
+							return $this->process_payment($order_id, false,
+								$force_customer);
+							// Source param wrong? The CARD may have been deleted on stripe's end. Remove token and show message.
+						} elseif ('source' === $response->get_error_code() && $source->token_id) {
+							$token = WC_Payment_Tokens::get($source->token_id);
+							$token->delete();
+							$message = __('This card is no longer available and has been removed.',
+								'woocommerce-gateway-stripe');
+							$order->add_order_note($message);
+							throw new Exception($message);
+						}
+
+						$localized_messages = $this->get_localized_messages();
+
+						$message = isset($localized_messages[$response->get_error_code()]) ? $localized_messages[$response->get_error_code()] : $response->get_error_message();
+
+						$order->add_order_note($message);
+
+						throw new Exception($message);
 					}
 
-					$localized_messages = $this->get_localized_messages();
+					// Process valid response.
+					$this->process_response($response, $order);
 
-					$message = isset( $localized_messages[ $response->get_error_code() ] ) ? $localized_messages[ $response->get_error_code() ] : $response->get_error_message();
-
-					$order->add_order_note( $message );
-
-					throw new Exception( $message );
 				}
-
-				// Process valid response.
-				$this->process_response( $response, $order );
 			} else {
 				$order->payment_complete();
 			}
@@ -822,6 +837,72 @@ class WC_Gateway_Stripe extends WC_Payment_Gateway_CC {
 				'redirect' => '',
 			);
 		}
+	}
+
+
+	/**
+	 * @param WC_Order $order
+	 *
+	 * @return bool
+	 */
+	protected function order_has_week_end( $order )
+	{
+		// Check if order has week end
+		$order_has_weekend = false;
+		$order_items = $order->get_items();
+
+		$week_end_term_id = get_option( 'boxla_week_end_term_id' );
+
+		foreach ( $order_items as $order_item ){
+			$product = $order_item->get_product();
+			$product_cat = $product->get_category_ids();
+
+			$order_has_weekend = in_array( $week_end_term_id, $product_cat );
+
+			if( $order_has_weekend ){
+				return true;
+			}
+		}
+
+		return $order_has_weekend;
+	}
+
+
+	/**
+	 * @param stdClass $source
+	 * @param WC_Order $order
+	 */
+	protected function process_week_end_order( $source, $order)
+	{
+
+		if ( ! $source->customer) {
+			// Si on a pas déja un token user de strip on en récupére un
+
+			// récupérer un token user de stripe
+			$billing_email      = $order->get_billing_email();
+			$billing_first_name = $order->get_billing_first_name();
+			$billing_last_name  = $order->get_billing_last_name();
+
+			$metadata = array(
+				__( 'Customer Name', 'woocommerce-gateway-stripe' ) => sanitize_text_field( $billing_first_name ) . ' ' . sanitize_text_field( $billing_last_name ),
+				__( 'Customer Email', 'woocommerce-gateway-stripe' ) => sanitize_email( $billing_email ),
+			);
+
+			$post_data['metadata'] = apply_filters( 'wc_stripe_payment_metadata', $metadata, $order, $source );
+			$post_data['source'] = $source->source;
+			$post_data['email'] = sanitize_email( $billing_email );
+			$response = WC_Stripe_API::request( $post_data, 'customers');
+
+			// On sauvegarde bien le token user de stripe en meta de la commande
+			$order->update_meta_data( '_stripe_customer_id', $response->id );
+		}
+
+		$order->update_meta_data( '_stripe_customer_charge_captured', 'no' );
+
+		// On traite la commande a en attente
+		wc_reduce_stock_levels( $order );
+		$order->update_status('on-hold','Une emprunte sur la CB du client a été prise. Vous pouvez débiter le client en terminant la commande.' );
+
 	}
 
 	/**
