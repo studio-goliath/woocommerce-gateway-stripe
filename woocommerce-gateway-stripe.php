@@ -491,6 +491,12 @@ if ( ! class_exists( 'WC_Stripe' ) ) :
 
 					// Peut être un customer a débiter plus tard
 					$customer_id = get_post_meta( $order_id, '_stripe_customer_id', true );
+					if( ! $customer_id ){
+						$user_id = $order->get_user_id();
+						if( $user_id ){
+							$customer_id = get_user_meta( $user_id, '_stripe_customer_id', 'true' );
+						}
+					}
 					$customer_charge_captured = get_post_meta( $order_id, '_stripe_customer_charge_captured', true );
 
 					if( $customer_id && 'no' == $customer_charge_captured ){
@@ -507,6 +513,7 @@ if ( ! class_exists( 'WC_Stripe' ) ) :
 						} else {
 							$order->add_order_note( sprintf( __( 'Stripe charge complete (Charge ID: %s)', 'woocommerce-gateway-stripe' ), $result->id ) );
 							update_post_meta( $order_id, '_stripe_customer_charge_captured', 'yes' );
+							delete_post_meta( $order_id, '_stripe_customer_id' );
 
 							// Store other data such as fees
 							update_post_meta( $order_id, 'Stripe Payment ID', $result->id );
