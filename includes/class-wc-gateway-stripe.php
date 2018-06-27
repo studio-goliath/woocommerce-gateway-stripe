@@ -766,7 +766,7 @@ class WC_Gateway_Stripe extends WC_Stripe_Payment_Gateway {
 				if ($this->order_has_week_end($order)) {
 
 					// Si la commande a des week end on prend juste le token du user stripe et on fera fera l'opération bancaire plus tard en back office
-					$this->process_week_end_order( $source_object, $order );
+					$this->process_week_end_order( $prepared_source, $order );
 
 				} else {
 					// Make the request.

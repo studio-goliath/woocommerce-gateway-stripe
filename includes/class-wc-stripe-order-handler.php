@@ -271,25 +271,26 @@ class WC_Stripe_Order_Handler extends WC_Stripe_Payment_Gateway {
 			} else {
 
 				// Peut être un customer a débiter plus tard
-				$customer_id = get_post_meta($order_id, '_stripe_customer_id',
-					true);
-				if ( ! $customer_id) {
-					$user_id = $order->get_user_id();
-					if ($user_id) {
-						$customer_id = get_user_meta($user_id,
-							'_stripe_customer_id', 'true');
-					}
-				}
+				$customer_id = $this->get_stripe_customer_id( $order );
+
 				$customer_charge_captured = get_post_meta($order_id,
 					'_stripe_customer_charge_captured', true);
 
 				if ($customer_id && 'no' == $customer_charge_captured) {
 
+					$order_total = $order->get_total();
+
+					if ( 0 < $order->get_total_refunded() ) {
+						$order_total = $order_total - $order->get_total_refunded();
+					}
+
+
 					$result = WC_Stripe_API::request(array(
-						'amount'   => $order->get_total() * 100,
+						'amount'   => WC_Stripe_Helper::get_stripe_amount( $order_total ),
 						'currency' => strtolower($order->get_currency()),
 						'customer' => $customer_id,
 						'expand[]' => 'balance_transaction',
+						'metadata' => array( 'order_id' => $order_id )
 					));
 
 					if (is_wp_error($result)) {
@@ -311,9 +312,9 @@ class WC_Stripe_Order_Handler extends WC_Stripe_Payment_Gateway {
 						if (isset($result->balance_transaction) && isset($result->balance_transaction->fee)) {
 							// Fees and Net needs to both come from Stripe to be accurate as the returned
 							// values are in the local currency of the Stripe account, not from WC.
-							$fee = ! empty($result->balance_transaction->fee) ? self::format_number($result->balance_transaction,
+							$fee = ! empty($result->balance_transaction->fee) ? WC_Stripe_Helper::format_balance_fee($result->balance_transaction,
 								'fee') : 0;
-							$net = ! empty($result->balance_transaction->net) ? self::format_number($result->balance_transaction,
+							$net = ! empty($result->balance_transaction->net) ? WC_Stripe_Helper::format_balance_fee($result->balance_transaction,
 								'net') : 0;
 							update_post_meta($order_id, 'Stripe Fee', $fee);
 							update_post_meta($order_id,
